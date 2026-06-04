@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=MetaAI
+Comment=Meta AI Desktop Client
+Exec=python3 "/media/genius/New Volume/Engineering/Programming/MetaAi/main.py"
+Icon=/media/genius/New Volume/Engineering/Programming/MetaAi/assets/icon.png
+Terminal=false
+Categories=Network;Chat;
+StartupNotify=true
+StartupWMClass=metaai-desktop
