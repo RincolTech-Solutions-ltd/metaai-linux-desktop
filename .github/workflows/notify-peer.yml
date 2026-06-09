@@ -2,7 +2,7 @@ name: Notify peer agent
 
 on:
   pull_request:
-    types: [closed]
+    types: [opened, closed]
   issues:
     types: [closed]
 
@@ -12,42 +12,59 @@ jobs:
     steps:
       - name: Build message
         id: msg
+        env:
+          EVENT_NAME:    ${{ github.event_name }}
+          EVENT_ACTION:  ${{ github.event.action }}
+          REPO:          ${{ github.repository }}
+          PR_HEAD:       ${{ github.event.pull_request.head.ref }}
+          PR_BASE:       ${{ github.event.pull_request.base.ref }}
+          PR_TITLE:      ${{ github.event.pull_request.title }}
+          PR_AUTHOR:     ${{ github.event.pull_request.user.login }}
+          PR_URL:        ${{ github.event.pull_request.html_url }}
+          PR_MERGED:     ${{ github.event.pull_request.merged }}
+          ISSUE_TITLE:   ${{ github.event.issue.title }}
+          ISSUE_AUTHOR:  ${{ github.event.issue.user.login }}
+          PEER_TRIGGER:  ${{ secrets.PEER_TRIGGER }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
-              EVENT="✅ PR merged"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if [ "$EVENT_ACTION" = "opened" ]; then
+              BODY="$(printf '🔍 PR opened — review requested\n📦 %s\n🌿 %s → %s\n📝 %s\n👤 %s\n🔗 %s' \
+                "$REPO" "$PR_HEAD" "$PR_BASE" "$PR_TITLE" "$PR_AUTHOR" "$PR_URL")"
+              TRIGGER="$PEER_TRIGGER Review request on ${REPO}: \"${PR_TITLE}\" by ${PR_AUTHOR}. URL: ${PR_URL}. Fetch the diff, review it, and merge if the changes are correct. If you find issues, request changes and notify the author."
+            elif [ "$PR_MERGED" = "true" ]; then
+              BODY="$(printf '✅ PR merged\n📦 %s\n🌿 %s → %s\n📝 %s\n👤 %s' \
+                "$REPO" "$PR_HEAD" "$PR_BASE" "$PR_TITLE" "$PR_AUTHOR")"
+              TRIGGER="$PEER_TRIGGER gEN\!u\$ PR merged on ${REPO}: \"${PR_TITLE}\". Pull and sync if this affects you."
             else
-              EVENT="🔴 PR closed (unmerged)"
+              BODY="$(printf '🔴 PR closed (unmerged)\n📦 %s\n🌿 %s → %s\n📝 %s\n👤 %s' \
+                "$REPO" "$PR_HEAD" "$PR_BASE" "$PR_TITLE" "$PR_AUTHOR")"
+              TRIGGER="$PEER_TRIGGER gEN\!u\$ PR closed unmerged on ${REPO}: \"${PR_TITLE}\". No action needed."
             fi
-            BODY="${EVENT}
-📦 ${{ github.repository }}
-🌿 ${{ github.event.pull_request.head.ref }} → ${{ github.event.pull_request.base.ref }}
-📝 ${{ github.event.pull_request.title }}
-👤 ${{ github.event.pull_request.user.login }}"
-            TRIGGER="${{ secrets.PEER_TRIGGER }} gEN!u\$ $EVENT on ${{ github.repository }}: \"${{ github.event.pull_request.title }}\". Pull and sync if this affects you."
           else
-            BODY="🔒 Issue closed
-📦 ${{ github.repository }}
-📝 ${{ github.event.issue.title }}
-👤 ${{ github.event.issue.user.login }}"
-            TRIGGER="${{ secrets.PEER_TRIGGER }} gEN!u\$ closed issue on ${{ github.repository }}: \"${{ github.event.issue.title }}\". Review if this affects your work."
+            BODY="$(printf '🔒 Issue closed\n📦 %s\n📝 %s\n👤 %s' \
+              "$REPO" "$ISSUE_TITLE" "$ISSUE_AUTHOR")"
+            TRIGGER="$PEER_TRIGGER gEN\!u\$ closed issue on ${REPO}: \"${ISSUE_TITLE}\". Review if this affects your work."
           fi
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "$BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "trigger<<EOF" >> $GITHUB_OUTPUT
-          echo "$TRIGGER" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY"    >> "$GITHUB_OUTPUT"
+          echo "EOF"      >> "$GITHUB_OUTPUT"
+          echo "trigger<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$TRIGGER"     >> "$GITHUB_OUTPUT"
+          echo "EOF"          >> "$GITHUB_OUTPUT"
 
       - name: Send via bridge
+        env:
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_IP:      ${{ secrets.SERVER_IP }}
+          PEER_JID:       ${{ secrets.PEER_JID }}
         run: |
-          ssh -i <(echo "${{ secrets.SERVER_SSH_KEY }}") \
+          ssh -i <(echo "$SERVER_SSH_KEY") \
             -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-            root@${{ secrets.SERVER_IP }} \
-            python3 -c "
+            root@"$SERVER_IP" \
+            python3 - "$PEER_JID" "${{ steps.msg.outputs.body }}" "${{ steps.msg.outputs.trigger }}" << 'PYEOF'
           import requests, sys
           jid, note, trigger = sys.argv[1], sys.argv[2], sys.argv[3]
           b = 'http://127.0.0.1:8080/send'
-          requests.post(b, json={'jid':jid,'text':note},    timeout=10)
-          requests.post(b, json={'jid':jid,'text':trigger}, timeout=10)
-          " "${{ secrets.PEER_JID }}" "${{ steps.msg.outputs.body }}" "${{ steps.msg.outputs.trigger }}"
+          requests.post(b, json={'jid': jid, 'text': note},    timeout=10)
+          requests.post(b, json={'jid': jid, 'text': trigger}, timeout=10)
+          PYEOF
