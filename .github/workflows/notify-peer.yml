@@ -134,13 +134,26 @@ jobs:
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
           SERVER_IP:      ${{ secrets.SERVER_IP }}
         run: |
-          ssh -i <(echo "$SERVER_SSH_KEY") \
+          echo "$SERVER_SSH_KEY" > /tmp/wa_key
+          chmod 600 /tmp/wa_key
+
+          JID="${{ steps.msg.outputs.recipient_jid }}"
+          BODY="${{ steps.msg.outputs.body }}"
+          TRIGGER="${{ steps.msg.outputs.trigger }}"
+
+          BODY_B64=$(printf '%s' "$BODY"    | base64 -w0)
+          TRIG_B64=$(printf '%s' "$TRIGGER" | base64 -w0)
+
+          ssh -i /tmp/wa_key \
             -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
             root@"$SERVER_IP" \
-            python3 - "${{ steps.msg.outputs.recipient_jid }}" "${{ steps.msg.outputs.body }}" "${{ steps.msg.outputs.trigger }}" << 'PYEOF'
-          import requests, sys
-          jid, note, trigger = sys.argv[1], sys.argv[2], sys.argv[3]
+            python3 - "$JID" "$BODY_B64" "$TRIG_B64" << 'PYEOF'
+          import requests, sys, base64
+          jid      = sys.argv[1]
+          note     = base64.b64decode(sys.argv[2]).decode()
+          trigger  = base64.b64decode(sys.argv[3]).decode()
           b = 'http://127.0.0.1:8080/send'
           requests.post(b, json={'jid': jid, 'text': note},    timeout=10)
           requests.post(b, json={'jid': jid, 'text': trigger}, timeout=10)
           PYEOF
+          rm -f /tmp/wa_key
