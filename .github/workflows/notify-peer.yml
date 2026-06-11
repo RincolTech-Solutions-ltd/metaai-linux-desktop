@@ -1,10 +1,11 @@
 name: Notify peer agent
 
 on:
+  push:
   pull_request:
     types: [opened, closed]
   issues:
-    types: [closed]
+    types: [opened, closed]
 
 jobs:
   notify:
@@ -16,6 +17,10 @@ jobs:
           EVENT_NAME:    ${{ github.event_name }}
           EVENT_ACTION:  ${{ github.event.action }}
           REPO:          ${{ github.repository }}
+          PUSHER:        ${{ github.event.pusher.name }}
+          BRANCH:        ${{ github.ref_name }}
+          COMPARE:       ${{ github.event.compare }}
+          COMMITS_JSON:  ${{ toJson(github.event.commits) }}
           PR_HEAD:       ${{ github.event.pull_request.head.ref }}
           PR_BASE:       ${{ github.event.pull_request.base.ref }}
           PR_TITLE:      ${{ github.event.pull_request.title }}
@@ -25,8 +30,50 @@ jobs:
           ISSUE_TITLE:   ${{ github.event.issue.title }}
           ISSUE_AUTHOR:  ${{ github.event.issue.user.login }}
           PEER_TRIGGER:  ${{ secrets.PEER_TRIGGER }}
+          TRIGGER_PREFIX: ${{ secrets.TRIGGER_PREFIX }}
+          PEER_JID:      ${{ secrets.PEER_JID }}
+          OWNER_JID:     ${{ secrets.OWNER_JID }}
         run: |
-          if [ "$EVENT_NAME" = "pull_request" ]; then
+          # Peer's GitHub username — used to route push notifications
+          PEER_GITHUB="arindakhill"
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            # Skip bot-generated pushes (GitHub Actions deployments, etc.)
+            if echo "$PUSHER" | grep -q '\[bot\]'; then
+              echo "Skipping bot push from $PUSHER"
+              exit 0
+            fi
+
+            COMMIT_COUNT=$(echo "$COMMITS_JSON" | jq 'length' 2>/dev/null || echo "0")
+            COMMIT_MSGS=$(echo "$COMMITS_JSON" | jq -r '.[0:5] | .[] | "• " + (.message | split("\n")[0])' 2>/dev/null || echo "• (commits unavailable)")
+
+            if [ "$PUSHER" = "$PEER_GITHUB" ]; then
+              # CTO pushed → notify Dennis's agent
+              TARGET_JID="$OWNER_JID"
+              TARGET_TRIGGER="$TRIGGER_PREFIX"
+              PUSHER_LABEL="CTO Hillary"
+            else
+              # Dennis (or anyone else) pushed → notify Hillary's agent
+              TARGET_JID="$PEER_JID"
+              TARGET_TRIGGER="$PEER_TRIGGER"
+              PUSHER_LABEL="gEN!u\$ Dennis"
+            fi
+
+            BODY="$(printf '📦 Push — %s\n🌿 Branch: %s\n👤 %s\n📝 %s commit(s):\n%s\n🔗 %s' \
+              "$REPO" "$BRANCH" "$PUSHER_LABEL" "$COMMIT_COUNT" "$COMMIT_MSGS" "$COMPARE")"
+            TRIGGER="${TARGET_TRIGGER} ${PUSHER_LABEL} pushed ${COMMIT_COUNT} commit(s) to ${REPO} on branch ${BRANCH}. Commits: ${COMMIT_MSGS}. Compare: ${COMPARE}. Use gh CLI to fetch and review the diff. Check for conflicts with your recent work. If you find issues, raise a GitHub issue or comment on the relevant commit. Report a summary."
+
+            echo "body<<EOF"          >> "$GITHUB_OUTPUT"
+            echo "$BODY"              >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+            echo "trigger<<EOF"       >> "$GITHUB_OUTPUT"
+            echo "$TRIGGER"           >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+            echo "recipient_jid<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$TARGET_JID"        >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
             if [ "$EVENT_ACTION" = "opened" ]; then
               BODY="$(printf '🔍 PR opened — review requested\n📦 %s\n🌿 %s → %s\n📝 %s\n👤 %s\n🔗 %s' \
                 "$REPO" "$PR_HEAD" "$PR_BASE" "$PR_TITLE" "$PR_AUTHOR" "$PR_URL")"
@@ -40,28 +87,55 @@ jobs:
                 "$REPO" "$PR_HEAD" "$PR_BASE" "$PR_TITLE" "$PR_AUTHOR")"
               TRIGGER="$PEER_TRIGGER gEN\!u\$ PR closed unmerged on ${REPO}: \"${PR_TITLE}\". No action needed."
             fi
+            echo "body<<EOF"          >> "$GITHUB_OUTPUT"
+            echo "$BODY"              >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+            echo "trigger<<EOF"       >> "$GITHUB_OUTPUT"
+            echo "$TRIGGER"           >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+            echo "recipient_jid<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$PEER_JID"          >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+
+          elif [ "$EVENT_ACTION" = "opened" ]; then
+            BODY="$(printf '🐛 Issue opened\n📦 %s\n📝 %s\n👤 %s' \
+              "$REPO" "$ISSUE_TITLE" "$ISSUE_AUTHOR")"
+            TRIGGER="$PEER_TRIGGER New issue opened on ${REPO}: \"${ISSUE_TITLE}\" by ${ISSUE_AUTHOR}. Check if this affects your work."
+            echo "body<<EOF"          >> "$GITHUB_OUTPUT"
+            echo "$BODY"              >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+            echo "trigger<<EOF"       >> "$GITHUB_OUTPUT"
+            echo "$TRIGGER"           >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+            echo "recipient_jid<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$PEER_JID"          >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+
           else
             BODY="$(printf '🔒 Issue closed\n📦 %s\n📝 %s\n👤 %s' \
               "$REPO" "$ISSUE_TITLE" "$ISSUE_AUTHOR")"
-            TRIGGER="$PEER_TRIGGER gEN\!u\$ closed issue on ${REPO}: \"${ISSUE_TITLE}\". Review if this affects your work."
+            TRIGGER="$PEER_TRIGGER Issue closed on ${REPO}: \"${ISSUE_TITLE}\". Review if this affects your work."
+            echo "body<<EOF"          >> "$GITHUB_OUTPUT"
+            echo "$BODY"              >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+            echo "trigger<<EOF"       >> "$GITHUB_OUTPUT"
+            echo "$TRIGGER"           >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
+            echo "recipient_jid<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$PEER_JID"          >> "$GITHUB_OUTPUT"
+            echo "EOF"                >> "$GITHUB_OUTPUT"
           fi
-          echo "body<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$BODY"    >> "$GITHUB_OUTPUT"
-          echo "EOF"      >> "$GITHUB_OUTPUT"
-          echo "trigger<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$TRIGGER"     >> "$GITHUB_OUTPUT"
-          echo "EOF"          >> "$GITHUB_OUTPUT"
 
       - name: Send via bridge
+        if: steps.msg.outputs.recipient_jid != ''
         env:
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
           SERVER_IP:      ${{ secrets.SERVER_IP }}
-          PEER_JID:       ${{ secrets.PEER_JID }}
         run: |
           ssh -i <(echo "$SERVER_SSH_KEY") \
             -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
             root@"$SERVER_IP" \
-            python3 - "$PEER_JID" "${{ steps.msg.outputs.body }}" "${{ steps.msg.outputs.trigger }}" << 'PYEOF'
+            python3 - "${{ steps.msg.outputs.recipient_jid }}" "${{ steps.msg.outputs.body }}" "${{ steps.msg.outputs.trigger }}" << 'PYEOF'
           import requests, sys
           jid, note, trigger = sys.argv[1], sys.argv[2], sys.argv[3]
           b = 'http://127.0.0.1:8080/send'
